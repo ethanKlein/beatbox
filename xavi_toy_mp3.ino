@@ -1,25 +1,20 @@
 /*
+  Beatbox code for the Klein Boys.
+  
+  Some code borrowed from the:
   MP3 Shield Trigger
   by: Jim Lindblom
       SparkFun Electronics
   date: September 23, 2013
 
   This is an example MP3 trigger sketch for the SparkFun MP3 Shield.
-  Pins 0, 1, 5, 10, A0, A1, A2, A3, and A4 are setup to trigger tracks
-  "track001.mp3", "track002.mp3", etc. on an SD card loaded into
-  the shield. Whenever any of those pins are shorted to ground,
-  their respective track will start playing.
 
   When a new pin is triggered, any track currently playing will
   stop, and the new one will start.
 
-  A5 is setup to globally STOP playing a track when triggered.
-
   If you need more triggers, the shield's jumpers on pins 3 and 4 
   (MIDI-IN and GPIO1) can be cut open and used as additional
-  trigger pins. Also, because pins 0 and 1 are used as triggers
-  Serial is not available for debugging. Disable those as
-  triggers if you want to use serial.
+  trigger pins.
 
   Much of this code was grabbed from the FilePlayer example
   included with the SFEMP3Shield library. Major thanks to Bill
@@ -39,86 +34,205 @@ SFEMP3Shield MP3player; // Create Mp3 library object
 const uint8_t volume = 0; // MP3 Player volume 0=max, 255=lowest (off)
 const uint16_t monoMode = 1;  // Mono setting 0=off, 3=max
 
-/* Pin setup */
-/* int triggerPins[TRIGGER_COUNT] = {0, 1, 5, 10, A0, A1, A2, A3, A4}; */
-// int triggerPins[TRIGGER_COUNT] = {5, 10, A0, A1, A2, A3, A4};
+#define DEBOUNCE 5  // button debouncer
 
+// here is where we define the buttons that we'll use. button "1" is the first, button "6" is the 6th, etc
+byte buttons[] = {A5, A3, A1};
+
+// This handy macro lets us determine how big the array up above is, by checking the size
+#define NUMBUTTONS sizeof(buttons)
+
+// we will track if a button is just pressed, just released, or 'pressed' (the current state
+volatile byte pressed[NUMBUTTONS], justpressed[NUMBUTTONS], justreleased[NUMBUTTONS];
+
+
+// ethan variables
 int toggleSwitch = 10;
-
 int button1 = A5;
-int button1led = A4;
 int button2 = A3;
-int button2led = A2;
 int button3 = A1;
-int button3led = A0;
 
-int toggleState = 0; 
+
+int led1 = A4;
+int led2 = A2;
+int led3 = A0;
+int currButton = A5;
+// char* bank1[] = {"XAVI.WAV", "LASER.WAV", "SUSP.WAV"};
+// char* bank2[] = {"ISLAND.WAV", "BLUES.WAV", "PARTY.WAV"};
+char* bank1[] = {"laser.mp3", "laser.mp3", "laser.mp3"};
+char* bank2[] = {"tipsy.mp3", "tipsy.mp3", "tipsy.mp3"};
+boolean buttonFirst[] = {true, true, true};
+
+
+int inPin = 10;         // the number of the input pin (toggle switch)
+int toggleState = HIGH;      // the current state of the output pin
+int reading;           // the current reading from the input pin
+int previous = LOW;    // the previous reading from the input pin
+
+int buttonState = HIGH;      // the current state of the output pin
+int buttonReading;           // the current reading from the input pin
+int buttonPrevious = LOW;    // the previous reading from the input pin
+
+// the follow variables are long's because the time, measured in miliseconds,
+// will quickly become a bigger number than can be stored in an int.
+long time = 0;         // the last time the output pin was toggled
+long debounce = 200;   // the debounce time, increase if the output flickers
 
 void setup() {
   Serial.begin(9600);
-  pinMode(button1led, OUTPUT);
-  pinMode(button2led, OUTPUT);
-  pinMode(button3led, OUTPUT);
+  byte i;
+  
+  // LEDs
+  pinMode(led1, OUTPUT);
+  pinMode(led2, OUTPUT);
+  pinMode(led3, OUTPUT);
+
+  // Toggle switch
+  pinMode(inPin, INPUT);
+ 
+  // Make input & enable pull-up resistors on switch pins
+  for (i=0; i< NUMBUTTONS; i++) {
+    pinMode(buttons[i], INPUT);
+    digitalWrite(buttons[i], HIGH);
+  }
 
   initSD();  // Initialize the SD card
   initMP3Player(); // Initialize the MP3 Shield
+  
 }
 
+SIGNAL(TIMER2_OVF_vect) {
+  //check_switches();
+}
+
+void check_switches() {
+  static byte previousstate[NUMBUTTONS];
+  static byte currentstate[NUMBUTTONS];
+  byte index;
+
+  for (index = 0; index < NUMBUTTONS; index++) {
+    currentstate[index] = digitalRead(buttons[index]);   // read the button
+    if (currentstate[index] == previousstate[index]) {
+      if ((pressed[index] == LOW) && (currentstate[index] == LOW) && millis() - time > debounce) {
+          justpressed[index] = 1; // just pressed
+      }
+      else if ((pressed[index] == HIGH) && (currentstate[index] == HIGH) && millis() - time > debounce) {
+          justreleased[index] = 1; // just released
+      }
+      pressed[index] = currentstate[index];  // remember, digital HIGH means NOT pressed
+    }
+    previousstate[index] = currentstate[index];   // keep a running tally of the buttons
+  }
+}
+
+
+void ledOn(int led) {
+  digitalWrite(led, HIGH);   // turn the LED on (HIGH is the voltage level)
+  // delay(100);               // wait for a second
+  // delay(1000);  
+}
+
+void ledOff(int led) {
+  digitalWrite(led, LOW);    // turn the LED off by making the voltage LOW
+}
+
+// if no mp3 file playing, change currWave to empty string. 
+void checkIfPlaying() {
+  if (!MP3player.isPlaying()) {
+    currButton=A5;
+  }
+}
+
+void checkToggle() {
+  reading = digitalRead(inPin);
+  // if the input just went from LOW and HIGH and we've waited long enough
+  // to ignore any noise on the circuit, toggle the output pin and remember the time
+  if (reading == HIGH && previous == LOW && millis() - time > debounce) {
+    if (toggleState == HIGH)
+      toggleState = LOW;
+    else
+      toggleState = HIGH;
+    time = millis();    
+  }
+ if (reading == LOW && previous == HIGH && millis() - time > debounce) {
+   if (toggleState == LOW)
+     toggleState = HIGH;
+   else
+     toggleState = LOW;
+   time = millis();    
+ } 
+  previous = reading;  
+}
+
+
 void loop() {
+  byte i;
+  check_switches();
+  checkIfPlaying(); 
+  checkToggle();
 
-  // Serial.println(digitalRead(toggleSwitch));
-
-  if (digitalRead(toggleSwitch) == LOW) {
-    toggleState = 0;
+  if (pressed[0] == 0) {
+    Serial.println("button 0");
+    ledOn(led1);
+    playfile(0);
+    buttonFirst[0] = false;
   } else {
-    toggleState = 1;
+    ledOff(led1);
+    buttonFirst[0] = true;
   }
 
-  if ((digitalRead(button1) == LOW)) {
-    Serial.println("button1 is LOW");    
-    stopTrack();
-    digitalWrite(button1led, HIGH);
-    if (toggleState == 0) {
-      MP3player.playMP3("tipsy.mp3");
-    } else {
-      MP3player.playMP3("boom.mp3");
-    }
+  if (pressed[1] == 0) {
+   Serial.println("button 1"); 
+   ledOn(led2);
+   playfile(1);
+   buttonFirst[1] = false;
   } else {
-    digitalWrite(button1led, LOW);
+    ledOff(led2);
+    buttonFirst[1] = true;
   }
 
-  if ((digitalRead(button2) == LOW)) {
-    Serial.println("button2 is LOW");
-    digitalWrite(button2led, HIGH); // turn on LED
-    stopTrack();
-    if (toggleState == 0) {
-      MP3player.playMP3("tipsy.mp3");
-    } else {
-      MP3player.playMP3("boom.mp3");
-    }
+  if (pressed[2] == 0) {
+    Serial.println("button 2");
+    ledOn(led3);
+    playfile(2);
+    buttonFirst[2] = false;
   } else {
-    digitalWrite(button2led, LOW); // turn off LED
+    ledOff(led3);
+    buttonFirst[2] = true;
   }
-
-  if ((digitalRead(button3) == LOW)) {
-    Serial.println("button3 is LOW");
-    digitalWrite(button3led, HIGH); // turn on LED
-    stopTrack();
-    if (toggleState == 0) {
-      MP3player.playMP3("tipsy.mp3");
-    } else {
-      MP3player.playMP3("boom.mp3");
-    }
-  } else {
-    digitalWrite(button3led, LOW); // turn off LED
-  }
-
 }
 
 // stop any tracks from playing
 void stopTrack() {
   if (MP3player.isPlaying()) {
     MP3player.stopTrack();
+  }
+}
+
+void playfile(int buttonNum) {
+  int testButton = buttonNum;
+  if (testButton == currButton) { // same button is pressed
+    if (buttonFirst[buttonNum] == true) {
+      stopTrack();
+      if (toggleState == HIGH) {
+        Serial.println("should be playing tipsy");
+        MP3player.playMP3("tipsy.mp3");
+        // MP3player.playMP3(bank1[buttonNum]);
+      } else {
+        MP3player.playMP3(bank2[buttonNum]);
+      }
+    }
+  } else {
+    currButton = buttonNum;
+    stopTrack();
+    if (toggleState == HIGH) {
+      Serial.println("should be playing tipsy");
+      MP3player.playMP3("tipsy.mp3");
+
+      // MP3player.playMP3(bank1[buttonNum]);
+    } else {
+      MP3player.playMP3(bank2[buttonNum]);
+    }
   }
 }
 
@@ -144,3 +258,10 @@ void initMP3Player() {
   MP3player.setVolume(volume, volume);
   MP3player.setMonoMode(monoMode);
 }
+
+
+
+
+
+
+
